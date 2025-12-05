@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kitchen Inventory Management</title>
+    
+    <!-- Tailwind CSS for modern styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Firebase SDKs (Version 8.10.0) -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+    <!-- jsPDF & AutoTable for Bill Generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            overflow-x: hidden;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+
+        /* Transitions */
+        .fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Sidebar Active State */
+        .nav-item.active {
+            background-color: #e0f2fe; /* Light Blue/Green mix */
+            color: #0ea5e9;
+            border-right: 4px solid #0ea5e9;
+        }
+
+        /* Modal Overlay */
+        .modal-overlay {
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(2px);
+        }
+        
+        /* Loader */
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Input Number Arrows Removal */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; 
+            margin: 0; 
+        }
+    </style>
+</head>
+<body class="text-slate-700 antialiased h-screen flex">
+
+    <!-- Sidebar -->
+    <aside class="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col h-full fixed md:relative z-20 shadow-lg transition-transform transform -translate-x-full md:translate-x-0" id="sidebar">
+        <div class="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-emerald-500 rounded-lg flex items-center justify-center text-white font-bold shadow-md">
+                    <i class="fas fa-leaf"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg text-slate-800">FreshStock</h1>
+                    <p class="text-xs text-slate-500">Kitchen Manager</p>
+                </div>
+            </div>
+        </div>
+
+        <nav class="flex-1 p-4 space-y-2">
+            <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 px-3">Menu</p>
+            
+            <button onclick="app.setRole('chef')" id="nav-chef" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-slate-50 transition-colors text-slate-600">
+                <i class="fas fa-hat-chef w-5"></i>
+                <span class="font-medium">Chef Mode</span>
+            </button>
+            
+            <button onclick="app.requestAdminAccess()" id="nav-admin" class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-slate-50 transition-colors text-slate-600">
+                <i class="fas fa-user-shield w-5"></i>
+                <span class="font-medium">Admin Panel</span>
+            </button>
+            
+            <!-- Bill Generator (Hidden for Chef) -->
+            <button onclick="ui.showBillGenerator()" id="nav-bill" class="nav-item hidden w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-slate-50 transition-colors text-slate-600">
+                <i class="fas fa-file-invoice-dollar w-5"></i>
+                <span class="font-medium">Bill Generator</span>
+            </button>
+        </nav>
+
+        <div class="p-4 border-t border-slate-100">
+            <div id="connectionStatus" class="flex items-center gap-2 text-xs text-slate-400">
+                <div class="w-2 h-2 rounded-full bg-red-500" id="statusDot"></div>
+                <span id="statusText">Disconnected</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 h-full flex flex-col relative overflow-hidden">
+        <!-- Header -->
+        <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10">
+            <div class="flex items-center gap-4">
+                <button class="md:hidden text-slate-500 hover:text-slate-800" onclick="ui.toggleSidebar()">
+                    <i class="fas fa-bars text-xl"></i>
+                </button>
+                <h2 id="pageTitle" class="text-xl font-bold text-slate-800">Chef Dashboard</h2>
+            </div>
+            
+            <div class="flex items-center gap-4">
+                <div class="relative" id="searchContainer">
+                    <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                    <input type="text" id="globalSearch" placeholder="Search item..." class="pl-9 pr-4 py-2 rounded-full bg-slate-100 border-none text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none w-48 transition-all hover:bg-slate-200" onkeyup="ui.filterItems()">
+                </div>
+                <button id="addBtn" onclick="ui.openModal('addModal')" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm flex items-center gap-2">
+                    <i class="fas fa-plus"></i> Add Item
+                </button>
+            </div>
+        </header>
+
+        <!-- Dynamic Content Area -->
+        <div id="contentArea" class="flex-1 overflow-y-auto p-6 relative">
+            
+            <!-- INVENTORY VIEW CONTAINER -->
+            <div id="inventoryView">
+                <!-- Dashboard/Stats Section (Admin Only) -->
+                <div id="adminStats" class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 hidden fade-in">
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-sm text-slate-500 mb-1">Total Grocery Items</p>
+                                <h3 class="text-3xl font-bold text-slate-800" id="statGrocery">0</h3>
+                            </div>
+                            <div class="p-3 bg-orange-100 text-orange-600 rounded-lg">
+                                <i class="fas fa-shopping-basket"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-sm text-slate-500 mb-1">Total Vegetables</p>
+                                <h3 class="text-3xl font-bold text-slate-800" id="statVeg">0</h3>
+                            </div>
+                            <div class="p-3 bg-green-100 text-green-600 rounded-lg">
+                                <i class="fas fa-carrot"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="text-sm text-slate-500 mb-1">Total Vessels</p>
+                                <h3 class="text-3xl font-bold text-slate-800" id="statVessels">0</h3>
+                            </div>
+                            <div class="p-3 bg-blue-100 text-blue-600 rounded-lg">
+                                <i class="fas fa-box-open"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tabs -->
+                <div class="flex gap-2 mb-6 border-b border-slate-200 pb-1">
+                    <button onclick="ui.switchTab('grocery')" class="tab-btn active px-4 py-2 text-sm font-medium text-slate-600 border-b-2 border-transparent hover:text-emerald-600 transition" data-tab="grocery">Groceries</button>
+                    <button onclick="ui.switchTab('vegetable')" class="tab-btn px-4 py-2 text-sm font-medium text-slate-600 border-b-2 border-transparent hover:text-emerald-600 transition" data-tab="vegetable">Vegetables</button>
+                    <button onclick="ui.switchTab('vessels')" class="tab-btn px-4 py-2 text-sm font-medium text-slate-600 border-b-2 border-transparent hover:text-emerald-600 transition" data-tab="vessels">Vessels</button>
+                </div>
+
+                <!-- Loader -->
+                <div id="mainLoader" class="hidden flex justify-center py-12">
+                    <div class="loader"></div>
+                </div>
+
+                <!-- Inventory Grid -->
+                <div id="inventoryGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 fade-in">
+                    <!-- Items injected here by JS -->
+                </div>
+                
+                <!-- Empty State -->
+                <div id="emptyState" class="hidden flex flex-col items-center justify-center py-12 text-slate-400">
+                    <i class="fas fa-box-open text-4xl mb-3 opacity-50"></i>
+                    <p>No items found in this category.</p>
+                </div>
+            </div>
+
+            <!-- BILL GENERATOR VIEW (Admin Only) -->
+            <div id="billGeneratorView" class="hidden fade-in h-full flex flex-col lg:flex-row gap-6">
+                <!-- Left: Product List with Add Button -->
+                <div class="w-full lg:w-1/2 bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col h-[600px]">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                            <i class="fas fa-boxes text-emerald-600"></i> Select Items
+                        </h3>
+                    </div>
+                    
+                    <!-- Filters -->
+                    <div class="flex gap-3 mb-4">
+                        <select id="billCategory" class="w-1/3 p-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-50" onchange="bill.renderInventoryList()">
+                            <option value="grocery">Grocery</option>
+                            <option value="vegetable">Vegetable</option>
+                            <option value="vessels">Vessels</option>
+                        </select>
+                        <div class="relative w-2/3">
+                            <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                            <input type="text" id="billSearch" placeholder="Search inventory..." class="w-full pl-8 p-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-slate-50" onkeyup="bill.renderInventoryList()">
+                        </div>
+                    </div>
+
+                    <!-- Scrollable List of Inventory Items -->
+                    <div class="flex-1 overflow-y-auto pr-2 space-y-2" id="billInventoryList">
+                        <!-- Dynamic Item Rows -->
+                    </div>
+                </div>
+
+                <!-- Right: Table Preview -->
+                <div class="w-full lg:w-1/2 flex flex-col bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden h-[600px]">
+                    <div class="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                        <h3 class="font-bold text-slate-700">Current Bill Draft</h3>
+                        <span id="billCount" class="text-xs font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded-full">0 Items</span>
+                    </div>
+                    
+                    <div class="flex-1 overflow-auto p-0">
+                        <table class="w-full text-sm text-left text-slate-600">
+                            <thead class="text-xs text-slate-500 uppercase bg-slate-50 sticky top-0">
+                                <tr>
+                                    <th class="px-4 py-3">Category</th>
+                                    <th class="px-4 py-3">Item</th>
+                                    <th class="px-4 py-3 text-right">Qty</th>
+                                    <th class="px-4 py-3 text-center">Unit</th>
+                                    <th class="px-4 py-3 text-center">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="billTableBody" class="divide-y divide-slate-100">
+                                <!-- Bill rows -->
+                                <tr id="emptyBillRow">
+                                    <td colspan="5" class="px-4 py-8 text-center text-slate-400 italic">
+                                        No items added yet.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="p-4 border-t border-slate-100 bg-slate-50 flex flex-wrap gap-3 justify-end">
+                        <button onclick="bill.downloadPDF()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium flex items-center gap-2">
+                            <i class="fas fa-file-pdf"></i> PDF
+                        </button>
+                        <button onclick="bill.applyToInventory()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium flex items-center gap-2">
+                            <i class="fas fa-check-circle"></i> Apply Stock
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Modal: Add Item (Admin - Only for creating NEW items) -->
+    <div id="addModal" class="fixed inset-0 z-50 hidden">
+        <div class="absolute inset-0 modal-overlay" onclick="ui.closeModal('addModal')"></div>
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-2xl w-full max-w-md p-6 fade-in">
+            <h3 class="text-lg font-bold text-slate-800 mb-4">Add New Item</h3>
+            <form onsubmit="app.handleAddItem(event)">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-500 uppercase mb-1">Category</label>
+                        <select id="addCategory" class="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none" onchange="ui.toggleUnitField()">
+                            <option value="grocery">Grocery</option>
+                            <option value="vegetable">Vegetable</option>
+                            <option value="vessels">Vessels</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-500 uppercase mb-1">Item Name</label>
+                        <input type="text" id="addName" required class="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="e.g., Rice, Tomato, Pan">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-500 uppercase mb-1">Quantity/Count</label>
+                            <input type="number" step="0.01" id="addQuantity" required class="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="0">
+                        </div>
+                        <div id="unitFieldContainer">
+                            <label class="block text-xs font-medium text-slate-500 uppercase mb-1">Unit</label>
+                            <select id="addUnit" class="w-full p-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                                <option value="kg">Kilogram (kg)</option>
+                                <option value="g">Gram (g)</option>
+                                <option value="l">Liter (l)</option>
+                                <option value="sack">Sack</option>
+                                <option value="box">Box</option>
+                                <option value="pack">Pack</option>
+                                <option value="piece">Piece</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-6 flex justify-end gap-3">
+                    <button type="button" onclick="ui.closeModal('addModal')" class="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg text-sm font-medium">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-sm">Add Item</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-4 right-4 bg-slate-800 text-white px-6 py-3 rounded-lg shadow-lg transform translate-y-20 opacity-0 transition-all duration-300 z-50 flex items-center gap-3">
+        <i class="fas fa-info-circle text-emerald-400"></i>
+        <span id="toastMsg">Notification</span>
+    </div>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // --- 1. CONFIGURATION AREA ---
+        // ==========================================
+        const customFirebaseConfig = {
+  apiKey: "AIzaSyBkgc0RI_2qmugDBtcVofdWrq9s_1Ca6Fg",
+  authDomain: "hosing-eba59.firebaseapp.com",
+  databaseURL: "https://hosing-eba59-default-rtdb.firebaseio.com",
+  projectId: "hosing-eba59",
+  storageBucket: "hosing-eba59.firebasestorage.app",
+  messagingSenderId: "963568996041",
+  appId: "1:963568996041:web:24765839fd6e2da1960718",
+  measurementId: "G-5LXSM6EMFH"
+};
+ 
+        // ==========================================
+
+        let db;
+        let auth;
+        let DB_ROOT = 'inventory'; 
+        const ADMIN_PASSKEY = "admin123";
+        let firebaseConfig = null;
+        
+        if (customFirebaseConfig) {
+            firebaseConfig = customFirebaseConfig;
+        } else if (typeof __firebase_config !== 'undefined') {
+            firebaseConfig = JSON.parse(__firebase_config);
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default';
+            DB_ROOT = `artifacts/${appId}/public/data/inventory`;
+        }
+
+        // --- Application State ---
+        const state = {
+            role: 'chef', 
+            currentTab: 'grocery',
+            inventory: { grocery: {}, vegetable: {}, vessels: {} },
+            isAdminAuthenticated: false,
+            billItems: [] // Holds temporary bill items
+        };
+
+        // --- UI Controller ---
+        const ui = {
+            toggleSidebar: () => {
+                const sb = document.getElementById('sidebar');
+                sb.classList.toggle('-translate-x-full');
+                sb.classList.toggle('fixed');
+                if(!sb.classList.contains('fixed')) sb.classList.add('fixed');
+            },
+
+            showToast: (msg, type = 'success') => {
+                const toast = document.getElementById('toast');
+                const msgEl = document.getElementById('toastMsg');
+                const icon = toast.querySelector('i');
+                msgEl.innerText = msg;
+                icon.className = type === 'error' ? 'fas fa-exclamation-circle text-red-400' : 'fas fa-info-circle text-emerald-400';
+                toast.classList.remove('translate-y-20', 'opacity-0');
+                setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 3000);
+            },
+
+            switchTab: (tabName) => {
+                // Ensure inventory view is shown
+                document.getElementById('inventoryView').classList.remove('hidden');
+                document.getElementById('billGeneratorView').classList.add('hidden');
+                document.getElementById('pageTitle').innerText = state.role === 'admin' ? "Admin Panel" : "Chef Dashboard";
+                if(state.role === 'admin') document.getElementById('addBtn').classList.remove('hidden');
+                document.getElementById('searchContainer').classList.remove('hidden');
+
+                state.currentTab = tabName;
+                document.querySelectorAll('.tab-btn').forEach(btn => {
+                    if(btn.dataset.tab === tabName) {
+                        btn.classList.add('border-emerald-500', 'text-emerald-600');
+                        btn.classList.remove('border-transparent', 'text-slate-600');
+                    } else {
+                        btn.classList.remove('border-emerald-500', 'text-emerald-600');
+                        btn.classList.add('border-transparent', 'text-slate-600');
+                    }
+                });
+                
+                // Update Sidebar highlight
+                document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('bg-emerald-50', 'text-emerald-600'));
+                if(state.role === 'admin') document.getElementById('nav-admin').classList.add('bg-emerald-50', 'text-emerald-600');
+                else document.getElementById('nav-chef').classList.add('bg-emerald-50', 'text-emerald-600');
+
+                ui.renderInventory();
+            },
+
+            showBillGenerator: () => {
+                document.getElementById('inventoryView').classList.add('hidden');
+                document.getElementById('billGeneratorView').classList.remove('hidden');
+                document.getElementById('pageTitle').innerText = "Bill Generator";
+                document.getElementById('addBtn').classList.add('hidden');
+                document.getElementById('searchContainer').classList.add('hidden');
+
+                // Sidebar highlight
+                document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('bg-emerald-50', 'text-emerald-600'));
+                document.getElementById('nav-bill').classList.add('bg-emerald-50', 'text-emerald-600');
+
+                // Init with current category
+                bill.renderInventoryList();
+            },
+
+            openModal: (modalId) => document.getElementById(modalId).classList.remove('hidden'),
+            closeModal: (modalId) => {
+                document.getElementById(modalId).classList.add('hidden');
+                if(modalId === 'addModal') document.querySelector('#addModal form').reset();
+            },
+
+            toggleUnitField: () => {
+                const cat = document.getElementById('addCategory').value;
+                const container = document.getElementById('unitFieldContainer');
+                if (cat === 'vessels') container.classList.add('opacity-50', 'pointer-events-none');
+                else container.classList.remove('opacity-50', 'pointer-events-none');
+            },
+
+            filterItems: () => ui.renderInventory(),
+
+            renderInventory: () => {
+                const grid = document.getElementById('inventoryGrid');
+                const searchTerm = document.getElementById('globalSearch').value.toLowerCase();
+                const data = state.inventory[state.currentTab] || {};
+                
+                grid.innerHTML = '';
+                let hasItems = false;
+
+                Object.keys(data).forEach(key => {
+                    const item = data[key];
+                    if (item.name.toLowerCase().includes(searchTerm)) {
+                        hasItems = true;
+                        
+                        const isVessel = state.currentTab === 'vessels';
+                        const qty = isVessel ? item.count : item.quantity;
+                        const unit = isVessel ? 'Units' : item.unit;
+                        const isLow = !isVessel && qty < 5;
+                        const cardBorder = isLow ? 'border-red-300' : 'border-slate-100';
+                        const badgeClass = isLow ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-600';
+
+                        let icon = 'fa-box';
+                        if(state.currentTab === 'vegetable') icon = 'fa-carrot';
+                        if(state.currentTab === 'vessels') icon = 'fa-utensils';
+                        if(state.currentTab === 'grocery') icon = 'fa-bread-slice';
+
+                        const card = document.createElement('div');
+                        card.className = `bg-white p-4 rounded-xl shadow-sm border ${cardBorder} hover:shadow-md transition relative overflow-hidden`;
+                        
+                        let controlsHtml = '';
+                        
+                        if (state.role === 'admin') {
+                            // ADMIN: Editable Input + Delete Button
+                            controlsHtml = `
+                                <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+                                    <div class="flex items-center gap-2 flex-1">
+                                        <label class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Qty:</label>
+                                        <input type="number" value="${qty}" onchange="app.quickUpdate('${key}', '${state.currentTab}', this.value)"
+                                            class="w-20 bg-slate-50 border border-slate-200 rounded px-2 py-1 text-center font-bold text-slate-700 focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                                        <span class="text-xs text-slate-400">${unit}</span>
+                                    </div>
+                                    <button onclick="app.quickDelete('${key}', '${state.currentTab}')" class="text-slate-300 hover:text-red-500 transition-colors p-2">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </div>`;
+                        } else {
+                            // CHEF: Minus Button ONLY (No Plus Button)
+                            controlsHtml = `
+                                <div class="mt-4 pt-3 border-t border-slate-100">
+                                    <div class="flex items-center gap-3">
+                                        <button onclick="app.quickAdjust('${key}', '${state.currentTab}', ${qty}, -1)" class="w-10 h-10 rounded-md bg-slate-100 hover:bg-red-50 hover:text-red-600 transition-colors flex items-center justify-center font-bold text-lg active:scale-95 border border-slate-200">
+                                            <i class="fas fa-minus"></i>
+                                        </button>
+                                        <div class="flex-1 text-center">
+                                             <span class="text-[10px] text-slate-400 font-bold uppercase block mb-0.5">Deduct</span>
+                                             <span class="text-xs text-slate-500">Tap to use 1 unit</span>
+                                        </div>
+                                    </div>
+                                </div>`;
+                        }
+
+                        card.innerHTML = `
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="w-10 h-10 rounded-lg ${badgeClass} flex items-center justify-center text-lg">
+                                    <i class="fas ${icon}"></i>
+                                </div>
+                                ${isLow ? `<span class="text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded-full">Low Stock</span>` : ''}
+                            </div>
+                            <h4 class="font-bold text-slate-800 text-lg truncate">${item.name}</h4>
+                            <p class="text-slate-500 text-sm mb-1">Last update: ${item.lastUpdated ? new Date(item.lastUpdated).toLocaleDateString() : 'N/A'}</p>
+                            <div class="flex items-baseline gap-1 mt-2">
+                                <span class="text-2xl font-bold ${isLow ? 'text-red-600' : 'text-emerald-600'}">${qty}</span>
+                                <span class="text-sm text-slate-400 font-medium">${unit}</span>
+                            </div>
+                            ${controlsHtml}`;
+                        grid.appendChild(card);
+                    }
+                });
+
+                if (!hasItems) document.getElementById('emptyState').classList.remove('hidden');
+                else document.getElementById('emptyState').classList.add('hidden');
+            },
+
+            updateStats: () => {
+                document.getElementById('statGrocery').innerText = Object.keys(state.inventory.grocery || {}).length;
+                document.getElementById('statVeg').innerText = Object.keys(state.inventory.vegetable || {}).length;
+                document.getElementById('statVessels').innerText = Object.keys(state.inventory.vessels || {}).length;
+            }
+        };
+
+        // --- Bill Controller ---
+        const bill = {
+            renderInventoryList: () => {
+                const cat = document.getElementById('billCategory').value;
+                const search = document.getElementById('billSearch').value.toLowerCase();
+                const listContainer = document.getElementById('billInventoryList');
+                const items = state.inventory[cat] || {};
+                
+                listContainer.innerHTML = '';
+                let hasItems = false;
+
+                Object.entries(items).forEach(([key, item]) => {
+                    if (item.name.toLowerCase().includes(search)) {
+                        hasItems = true;
+                        
+                        const isVessel = cat === 'vessels';
+                        const currentQty = isVessel ? item.count : item.quantity;
+                        const unit = isVessel ? 'Units' : item.unit;
+                        
+                        // Status styling
+                        const isLow = !isVessel && currentQty < 5;
+                        const stockColor = isLow ? 'text-red-500 font-bold' : 'text-emerald-600 font-medium';
+
+                        const row = document.createElement('div');
+                        row.className = "flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100 hover:bg-white hover:shadow-sm transition";
+                        row.innerHTML = `
+                            <div>
+                                <p class="font-bold text-slate-700">${item.name}</p>
+                                <p class="text-xs text-slate-500 mt-1">Stock: <span class="${stockColor}">${currentQty} ${unit}</span></p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <input type="number" id="qty-${key}" placeholder="Add Qty" class="w-20 p-2 text-center text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <button onclick="bill.addFromList('${key}', '${item.name}', '${unit}', '${cat}')" class="w-9 h-9 flex items-center justify-center bg-slate-800 text-white rounded-lg hover:bg-emerald-600 transition shadow-sm">
+                                    <i class="fas fa-plus"></i>
+                                </button>
+                            </div>
+                        `;
+                        listContainer.appendChild(row);
+                    }
+                });
+
+                if(!hasItems) {
+                    listContainer.innerHTML = `<div class="text-center py-8 text-slate-400 italic text-sm">No items found matching filter.</div>`;
+                }
+            },
+
+            addFromList: (key, name, unit, category) => {
+                const qtyInput = document.getElementById(`qty-${key}`);
+                const qty = parseFloat(qtyInput.value);
+
+                if (isNaN(qty) || qty <= 0) {
+                    ui.showToast("Enter a valid quantity", "error");
+                    qtyInput.focus();
+                    return;
+                }
+
+                state.billItems.push({
+                    id: Date.now(),
+                    category,
+                    name,
+                    qty,
+                    unit
+                });
+
+                // Clear input
+                qtyInput.value = '';
+                
+                bill.renderTable();
+                ui.showToast(`${name} added to bill`);
+            },
+
+            removeItem: (id) => {
+                state.billItems = state.billItems.filter(item => item.id !== id);
+                bill.renderTable();
+            },
+
+            renderTable: () => {
+                const tbody = document.getElementById('billTableBody');
+                document.getElementById('billCount').innerText = `${state.billItems.length} Items`;
+                
+                if(state.billItems.length === 0) {
+                    tbody.innerHTML = `<tr id="emptyBillRow"><td colspan="5" class="px-4 py-8 text-center text-slate-400 italic">No items added yet.</td></tr>`;
+                    return;
+                }
+
+                tbody.innerHTML = '';
+                state.billItems.forEach(item => {
+                    const tr = document.createElement('tr');
+                    tr.className = "hover:bg-slate-50 transition";
+                    tr.innerHTML = `
+                        <td class="px-4 py-3 font-medium text-slate-800 capitalize">${item.category}</td>
+                        <td class="px-4 py-3">${item.name}</td>
+                        <td class="px-4 py-3 text-right font-bold text-slate-700">${item.qty}</td>
+                        <td class="px-4 py-3 text-center text-xs text-slate-500">${item.unit}</td>
+                        <td class="px-4 py-3 text-center">
+                            <button onclick="bill.removeItem(${item.id})" class="text-red-400 hover:text-red-600 transition"><i class="fas fa-times"></i></button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            },
+
+            downloadPDF: () => {
+                if(state.billItems.length === 0) {
+                    ui.showToast("Bill is empty!", "error");
+                    return;
+                }
+
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF();
+
+                // Header
+                doc.setFontSize(18);
+                doc.text("Kitchen Inventory - Purchase Order", 14, 20);
+                doc.setFontSize(10);
+                doc.text(`Date: ${new Date().toLocaleDateString()}`, 14, 28);
+
+                // Table
+                const tableColumn = ["Category", "Item Name", "Quantity", "Unit"];
+                const tableRows = [];
+
+                state.billItems.forEach(item => {
+                    const rowData = [
+                        item.category.toUpperCase(),
+                        item.name,
+                        item.qty,
+                        item.unit
+                    ];
+                    tableRows.push(rowData);
+                });
+
+                doc.autoTable({
+                    head: [tableColumn],
+                    body: tableRows,
+                    startY: 35,
+                    theme: 'grid',
+                    headStyles: { fillColor: [16, 185, 129] }, // Emerald color
+                });
+
+                doc.save(`inventory-bill-${Date.now()}.pdf`);
+                ui.showToast("PDF Downloaded");
+            },
+
+            applyToInventory: async () => {
+                if(state.billItems.length === 0) {
+                    ui.showToast("Nothing to apply!", "error");
+                    return;
+                }
+
+                if(!confirm("This will add all bill quantities to your current inventory. Continue?")) return;
+
+                const updates = {};
+                let itemsAdded = 0;
+                let itemsUpdated = 0;
+
+                for (const billItem of state.billItems) {
+                    const cat = billItem.category;
+                    const existingData = state.inventory[cat] || {};
+                    let matchKey = null;
+
+                    // 1. Check if item exists (Case insensitive match)
+                    for (const [key, val] of Object.entries(existingData)) {
+                        if (val.name.toLowerCase() === billItem.name.toLowerCase()) {
+                            matchKey = key;
+                            break;
+                        }
+                    }
+
+                    if (matchKey) {
+                        // Update existing
+                        const currentQty = cat === 'vessels' ? existingData[matchKey].count : existingData[matchKey].quantity;
+                        const newQty = (parseFloat(currentQty) || 0) + parseFloat(billItem.qty);
+                        
+                        updates[`${DB_ROOT}/${cat}/${matchKey}/${cat === 'vessels' ? 'count' : 'quantity'}`] = newQty;
+                        updates[`${DB_ROOT}/${cat}/${matchKey}/lastUpdated`] = firebase.database.ServerValue.TIMESTAMP;
+                        itemsUpdated++;
+                    } else {
+                        // Create new
+                        const newKey = db.ref(`${DB_ROOT}/${cat}`).push().key;
+                        const newItem = {
+                            name: billItem.name,
+                            category: cat,
+                            lastUpdated: firebase.database.ServerValue.TIMESTAMP
+                        };
+                        if (cat === 'vessels') newItem.count = billItem.qty;
+                        else {
+                            newItem.quantity = billItem.qty;
+                            newItem.unit = billItem.unit;
+                        }
+                        updates[`${DB_ROOT}/${cat}/${newKey}`] = newItem;
+                        itemsAdded++;
+                    }
+                }
+
+                try {
+                    await db.ref().update(updates);
+                    ui.showToast(`Applied: ${itemsAdded} New, ${itemsUpdated} Updated`);
+                    state.billItems = []; // Clear bill
+                    bill.renderInventoryList(); // Refresh list to show new stock
+                    bill.renderTable();
+                } catch (error) {
+                    console.error(error);
+                    ui.showToast("Error applying bill", "error");
+                }
+            }
+        };
+
+        // --- Logic Controller ---
+        const app = {
+            init: async () => {
+                if (!firebaseConfig) {
+                    console.error("Firebase Config Missing");
+                    ui.showToast("Config Missing", "error");
+                    return;
+                }
+                firebase.initializeApp(firebaseConfig);
+                auth = firebase.auth();
+                db = firebase.database();
+
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await auth.signInWithCustomToken(__initial_auth_token);
+                    } else {
+                        await auth.signInAnonymously();
+                    }
+                    document.getElementById('statusDot').classList.replace('bg-red-500', 'bg-emerald-500');
+                    document.getElementById('statusText').innerText = "Connected";
+                    app.listenToData();
+                } catch (error) {
+                    console.error(error);
+                    ui.showToast("Connection Error", "error");
+                }
+
+                app.setRole('chef');
+            },
+
+            listenToData: () => {
+                document.getElementById('mainLoader').classList.remove('hidden');
+                db.ref(DB_ROOT).on('value', (snapshot) => {
+                    document.getElementById('mainLoader').classList.add('hidden');
+                    const val = snapshot.val();
+                    if (val) {
+                        state.inventory.grocery = val.grocery || {};
+                        state.inventory.vegetable = val.vegetable || {};
+                        state.inventory.vessels = val.vessels || {};
+                    } else {
+                        state.inventory = { grocery: {}, vegetable: {}, vessels: {} };
+                    }
+                    ui.renderInventory();
+                    ui.updateStats();
+                }, (error) => {
+                    document.getElementById('mainLoader').classList.add('hidden');
+                    if(error.code === 'PERMISSION_DENIED') ui.showToast("Permission Denied", "error");
+                });
+            },
+
+            requestAdminAccess: () => {
+                if(state.isAdminAuthenticated) {
+                    app.setRole('admin');
+                    return;
+                }
+                const pass = prompt("Enter Admin Passkey:");
+                if (pass === ADMIN_PASSKEY) {
+                    state.isAdminAuthenticated = true;
+                    app.setRole('admin');
+                    ui.showToast("Welcome Admin");
+                } else if (pass !== null) {
+                    ui.showToast("Invalid Passkey", "error");
+                }
+            },
+
+            setRole: (role) => {
+                state.role = role;
+                ui.switchTab('grocery'); // Reset view to inventory
+
+                // Toggle visibility based on role
+                const adminElements = [
+                    document.getElementById('nav-bill'),
+                    document.getElementById('adminStats'),
+                    document.getElementById('addBtn')
+                ];
+
+                if (role === 'admin') {
+                    adminElements.forEach(el => el.classList.remove('hidden'));
+                } else {
+                    adminElements.forEach(el => el.classList.add('hidden'));
+                }
+            },
+
+            handleAddItem: (e) => {
+                e.preventDefault();
+                const category = document.getElementById('addCategory').value;
+                const name = document.getElementById('addName').value;
+                const quantity = parseFloat(document.getElementById('addQuantity').value);
+                const unit = document.getElementById('addUnit').value;
+
+                if (!name || quantity < 0) return;
+
+                const newItem = {
+                    name,
+                    category,
+                    lastUpdated: firebase.database.ServerValue.TIMESTAMP
+                };
+
+                if (category === 'vessels') newItem.count = quantity;
+                else {
+                    newItem.quantity = quantity;
+                    newItem.unit = unit;
+                }
+
+                db.ref(`${DB_ROOT}/${category}`).push().set(newItem)
+                    .then(() => {
+                        ui.closeModal('addModal');
+                        ui.showToast(`${name} added`);
+                    })
+                    .catch(() => ui.showToast("Error adding item", "error"));
+            },
+
+            quickUpdate: (id, category, newVal) => {
+                const val = parseFloat(newVal);
+                if (isNaN(val) || val < 0) return;
+                const updates = { lastUpdated: firebase.database.ServerValue.TIMESTAMP };
+                updates[category === 'vessels' ? 'count' : 'quantity'] = val;
+                db.ref(`${DB_ROOT}/${category}/${id}`).update(updates);
+            },
+
+            quickAdjust: (id, category, currentVal, delta) => {
+                let newVal = currentVal + delta;
+                if (newVal < 0) newVal = 0;
+                newVal = Math.round(newVal * 100) / 100;
+                const updates = { lastUpdated: firebase.database.ServerValue.TIMESTAMP };
+                updates[category === 'vessels' ? 'count' : 'quantity'] = newVal;
+                db.ref(`${DB_ROOT}/${category}/${id}`).update(updates);
+            },
+
+            quickDelete: (id, category) => {
+                if(!confirm("Delete this item permanently?")) return;
+                db.ref(`${DB_ROOT}/${category}/${id}`).remove()
+                    .then(() => ui.showToast("Item deleted"));
+            }
+        };
+
+        window.addEventListener('load', app.init);
+    </script>
+</body>
+</html>
